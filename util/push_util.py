@@ -3,6 +3,11 @@ import json
 import requests
 from datetime import datetime
 import pytz
+import base64
+import hashlib
+import hmac
+import time
+from urllib.parse import quote
 
 
 def get_beijing_time():
@@ -26,7 +31,8 @@ class PushConfig:
                  push_wechat_webhook_key=None,
                  telegram_bot_token=None,
                  telegram_chat_id=None,
-                 dingtalk_webhook=None):
+                 dingtalk_webhook=None,
+                 dingtalk_secret=None):
         self.push_plus_token = push_plus_token
         self.push_plus_hour = push_plus_hour
         self.push_plus_max = int(push_plus_max) if push_plus_max else 30
@@ -34,6 +40,7 @@ class PushConfig:
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
         self.dingtalk_webhook = dingtalk_webhook
+        self.dingtalk_secret = dingtalk_secret
 
 
 def push_plus(token, title, content):
@@ -137,17 +144,26 @@ def push_telegram_bot(bot_token, chat_id, content):
         print(f"telegram bot推送发生未知异常: {e}")
 
 
-def push_dingtalk(webhook, title, content):
+def push_dingtalk(webhook, title, content, secret=None):
     """
-    推送钉钉群机器人通知，支持传入完整webhook地址或仅access_token
+    推送钉钉群机器人通知，支持传入完整webhook地址或仅access_token，支持加签
 
     :param webhook: 完整webhook地址（https://oapi.dingtalk.com/robot/send?access_token=xxx）或access_token
     :param title: 推送标题
     :param content: 推送内容，markdown格式
+    :param secret: 加签密钥（SEC开头），设置后自动计算timestamp和sign
     :return:
     """
     requestUrl = webhook if webhook.startswith('http') else \
         f"https://oapi.dingtalk.com/robot/send?access_token={webhook}"
+    if secret and secret != '' and secret != 'NO':
+        timestamp = str(round(time.time() * 1000))
+        string_to_sign = f"{timestamp}\n{secret}"
+        hmac_code = hmac.new(secret.encode('utf-8'), string_to_sign.encode('utf-8'),
+                             digestmod=hashlib.sha256).digest()
+        sign = quote(base64.b64encode(hmac_code).decode('utf-8'))
+        separator = '&' if '?' in requestUrl else '?'
+        requestUrl = f"{requestUrl}{separator}timestamp={timestamp}&sign={sign}"
     payload = {
         "msgtype": "markdown",
         "markdown": {
@@ -291,6 +307,7 @@ def push_to_dingtalk(exec_results, summary, config: PushConfig):
                     content += f'\n- 账号：{exec_result["user"]}刷步数成功，接口返回：{exec_result["msg"]}'
                 else:
                     content += f'\n- 账号：{exec_result["user"]}刷步数失败，失败原因：{exec_result["msg"]}'
-        push_dingtalk(config.dingtalk_webhook, f"{format_now()} 刷步数通知", content)
+        push_dingtalk(config.dingtalk_webhook, f"{format_now()} 刷步数通知", content,
+                      config.dingtalk_secret)
     else:
         print("未配置 DINGTALK_WEBHOOK 跳过钉钉推送")
